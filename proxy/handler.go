@@ -151,6 +151,10 @@ func (h *Handler) dispatchRequest(req *proto.Request) {
 	}
 	req.BatchWait()
 	resp.Merge(subs)
+	// Release buffer
+	for _, sub := range subs {
+		h.decoder.Release(&sub)
+	}
 	req.Done(resp)
 }
 
@@ -192,6 +196,7 @@ func (h *Handler) handleWriter() {
 			h.conn.SetWriteDeadline(time.Now().Add(time.Duration(h.c.Proxy.WriteTimeout) * time.Millisecond))
 		}
 		err = h.encoder.Encode(req.Resp)
+		h.decoder.Release(req)
 		stat.ProxyTime(h.cluster.cc.Name, req.Cmd(), int64(req.Since()/time.Microsecond))
 	}
 }

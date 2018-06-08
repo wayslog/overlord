@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/felixhao/overlord/lib/bufio"
 	"github.com/felixhao/overlord/lib/conv"
+	"github.com/felixhao/overlord/lib/slab"
 	"github.com/felixhao/overlord/proto"
 	"github.com/pkg/errors"
 )
@@ -17,15 +17,24 @@ const (
 )
 
 type decoder struct {
-	br *bufio.Reader
+	br *slab.Reader
 }
 
 // NewDecoder new a memcache decoder.
 func NewDecoder(r io.Reader) proto.Decoder {
 	d := &decoder{
-		br: bufio.NewReaderSize(r, decoderBufferSize),
+		br: slab.NewReader(r, decoderBufferSize),
 	}
 	return d
+}
+
+func (d *decoder) Release(req *proto.Request) {
+	mcr, ok := req.Proto().(*MCRequest)
+	if !ok {
+		return
+	}
+	d.br.Release(mcr.key)
+	d.br.Release(mcr.data)
 }
 
 // Decode decode bytes from reader.
@@ -81,9 +90,10 @@ func (d *decoder) Decode() (req *proto.Request, err error) {
 	return nil, errors.Wrap(ErrError, "MC Decoder Decode command no exist")
 }
 
-func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool) (req *proto.Request, err error) {
+func storageRequest(r *slab.Reader, reqType RequestType, bs []byte, noCas bool) (req *proto.Request, err error) {
 	// sanity check
 	if c := bytes.Count(bs, spaceBytes); (noCas && c != 4) || (!noCas && c != 5) {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadRequest, "MC Decoder storage request sanity check spaceCount(%d) noCas(%t)", c, noCas)
 		return
 	}
@@ -91,11 +101,13 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	// key
 	ki := bytes.IndexByte(bs[index:], spaceByte)
 	if ki <= 0 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadRequest, "MC Decoder storage request get key index")
 		return
 	}
 	key := bs[index : index+ki]
 	if !legalKey(key, false) {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadKey, "MC Decoder storage request legal key")
 		return
 	}
@@ -103,6 +115,7 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	// flags
 	fi := bytes.IndexByte(bs[index:], spaceByte)
 	if fi <= 0 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadFlags, "MC Decoder storage request get flags index")
 		return
 	}
@@ -110,6 +123,7 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	if !bytes.Equal(flagBs, zeroBytes) { // NOTE: if equal to zero, there is no need to parse.
 		var flags int64
 		if flags, err = conv.Btoi(flagBs); err != nil || flags > maxUint32 {
+			r.Release(bs)
 			err = errors.Wrapf(ErrBadFlags, "MC Decoder storage request parse flags(%s)", flagBs)
 			return
 		}
@@ -118,12 +132,14 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	// exptime
 	ei := bytes.IndexByte(bs[index:], spaceByte)
 	if ei <= 0 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadExptime, "MC Decoder storage request get exptime index")
 		return
 	}
 	expBs := bs[index : index+ei]
 	if !bytes.Equal(expBs, zeroBytes) {
 		if _, err = conv.Btoi(expBs); err != nil {
+			r.Release(bs)
 			err = errors.Wrapf(ErrBadExptime, "MC Decoder storage request parse exptime(%s)", expBs)
 			return
 		}
@@ -148,11 +164,13 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	}
 	length, err := conv.Btoi(bsBs)
 	if err != nil {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadLength, "MC Decoder storage request parse bytes length(%s)", bsBs)
 		return
 	}
 	if !noCas {
 		if index >= len(bs)-2 {
+			r.Release(bs)
 			err = errors.Wrap(ErrBadRequest, "MC Decoder storage request get cas index check bs length")
 			return
 		}
@@ -167,10 +185,12 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	// read storage data
 	ds, err := r.ReadFull(int(length + 2)) // NOTE: +2 means until '\r\n'
 	if err != nil {
+		r.Release(bs)
 		err = errors.Wrapf(err, "MC decoder storage request while reading data line")
 		return
 	}
 	if !bytes.HasSuffix(ds, crlfBytes) {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadLength, "MC Decoder storage request data not end with CRLF length(%d)", length)
 		return
 	}
@@ -183,15 +203,17 @@ func storageRequest(r *bufio.Reader, reqType RequestType, bs []byte, noCas bool)
 	return
 }
 
-func retrievalRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
+func retrievalRequest(r *slab.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
 	// sanity check
 	if len(bs) <= 3 {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadRequest, "MC Decoder retrieval request sanity check bsLen(%d)", len(bs))
 		return
 	}
 	index := 1
 	key := bs[index : len(bs)-2]
 	if !legalKey(key, true) {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadKey, "MC Decoder retrieval request legal key")
 		return
 	}
@@ -206,15 +228,17 @@ func retrievalRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *pro
 	return
 }
 
-func deleteRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
+func deleteRequest(r *slab.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
 	// sanity check
 	if len(bs) <= 3 {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadRequest, "MC Decoder delete request sanity check bsLen(%d)", len(bs))
 		return
 	}
 	index := 1
 	key := bs[index : len(bs)-2]
 	if !legalKey(key, false) {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadKey, "MC Decoder delete request legal key")
 		return
 	}
@@ -227,9 +251,10 @@ func deleteRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.
 	return
 }
 
-func incrDecrRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
+func incrDecrRequest(r *slab.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
 	// sanity check
 	if c := bytes.Count(bs, spaceBytes); c != 2 {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadRequest, "MC Decoder incrDecr request sanity check spaceCount(%d)", c)
 		return
 	}
@@ -242,18 +267,21 @@ func incrDecrRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *prot
 	}
 	key := bs[index : index+ki]
 	if !legalKey(key, false) {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadKey, "MC Decoder incrDecr request legal key")
 		return
 	}
 	index += ki + 1
 	// value
 	if index >= len(bs)-2 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadRequest, "MC Decoder incrDecr request get value check bs length")
 		return
 	}
 	valueBs := bs[index : len(bs)-2]
 	if !bytes.Equal(valueBs, oneBytes) {
 		if _, err = conv.Btoi(valueBs); err != nil {
+			r.Release(bs)
 			err = errors.Wrapf(ErrBadRequest, "MC Decoder incrDecr request parse value(%s)", valueBs)
 			return
 		}
@@ -267,9 +295,10 @@ func incrDecrRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *prot
 	return
 }
 
-func touchRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
+func touchRequest(r *slab.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
 	// sanity check
 	if c := bytes.Count(bs, spaceBytes); c != 2 {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadRequest, "MC Decoder touch request sanity check spaceCount(%d)", c)
 		return
 	}
@@ -282,12 +311,14 @@ func touchRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.R
 	}
 	key := bs[index : index+ki]
 	if !legalKey(key, false) {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadKey, "MC Decoder touch request legal key")
 		return
 	}
 	index += ki + 1
 	// exptime
 	if index >= len(bs)-2 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadRequest, "MC Decoder touch request get exptime check bs length")
 		return
 	}
@@ -307,9 +338,10 @@ func touchRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.R
 	return
 }
 
-func getAndTouchRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
+func getAndTouchRequest(r *slab.Reader, reqType RequestType, bs []byte) (req *proto.Request, err error) {
 	// sanity check
 	if c := bytes.Count(bs, spaceBytes); c < 2 {
+		r.Release(bs)
 		err = errors.Wrapf(ErrBadRequest, "MC Decoder getAndTouch request sanity check spaceCount(%d)", c)
 		return
 	}
@@ -317,6 +349,7 @@ func getAndTouchRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *p
 	// exptime
 	ei := bytes.IndexByte(bs[index:], spaceByte)
 	if ei <= 0 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadRequest, "MC Decoder getAndTouch request get exptime index")
 		return
 	}
@@ -330,11 +363,13 @@ func getAndTouchRequest(r *bufio.Reader, reqType RequestType, bs []byte) (req *p
 	index += ei + 1
 	// key
 	if index >= len(bs)-2 {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadRequest, "MC Decoder getAndTouch request get exptime check bs length")
 		return
 	}
 	key := bs[index : len(bs)-2]
 	if !legalKey(key, true) {
+		r.Release(bs)
 		err = errors.Wrap(ErrBadKey, "MC Decoder getAndTouch request legal key")
 		return
 	}

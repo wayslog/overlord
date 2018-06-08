@@ -9,6 +9,7 @@ import (
 	"github.com/felixhao/overlord/lib/bufio"
 	"github.com/felixhao/overlord/lib/conv"
 	"github.com/felixhao/overlord/lib/pool"
+	"github.com/felixhao/overlord/lib/slab"
 	"github.com/felixhao/overlord/lib/stat"
 	"github.com/felixhao/overlord/proto"
 	"github.com/pkg/errors"
@@ -26,10 +27,11 @@ type handler struct {
 	cluster string
 	addr    string
 	conn    net.Conn
-	br      *bufio.Reader
-	bw      *bufio.Writer
-	bss     [][]byte
-	buf     []byte
+
+	br  *slab.Reader
+	bw  *bufio.Writer
+	bss [][]byte
+	buf []byte
 
 	readTimeout  time.Duration
 	writeTimeout time.Duration
@@ -49,7 +51,7 @@ func Dial(cluster, addr string, dialTimeout, readTimeout, writeTimeout time.Dura
 			addr:         addr,
 			conn:         conn,
 			bw:           bufio.NewWriterSize(conn, handlerWriteBufferSize),
-			br:           bufio.NewReaderSize(conn, handlerReadBufferSize),
+			br:           slab.NewReader(conn, handlerReadBufferSize),
 			bss:          make([][]byte, 2), // NOTE: like: 'VALUE a_11 0 0 3\r\naaa\r\nEND\r\n', and not copy 'END\r\n'
 			readTimeout:  readTimeout,
 			writeTimeout: writeTimeout,

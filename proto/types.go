@@ -193,6 +193,7 @@ type Encoder interface {
 // Decoder decode bytes from client.
 type Decoder interface {
 	Decode() (*Request, error)
+	Release(*Request)
 }
 
 // Handler handle request to backend cache server and read response.
