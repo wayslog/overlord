@@ -18,9 +18,9 @@ type Reader struct {
 
 	buf []byte
 
-	free     int
 	acquired int
 	readed   int
+	free     int
 }
 
 // NewReader will create new cycle using reader
@@ -50,18 +50,11 @@ func (r *Reader) growSize(size int) {
 	}
 
 	buf := make([]byte, cap)
-	copy(buf, r.buf[r.free:r.acquired])
-	r.acquired = r.acquired - r.free
-	r.readed = r.readed - r.free
+	copy(buf, r.buf[r.readed:r.acquired])
+	r.acquired = r.acquired - r.readed
+	r.readed = 0
 	r.free = 0
 	r.buf = buf
-}
-
-func (r *Reader) shrink() {
-	copy(r.buf, r.buf[r.free:r.acquired])
-	r.acquired = r.acquired - r.free
-	r.readed = r.readed - r.free
-	r.free = 0
 }
 
 func (r *Reader) hasUnreaded() bool {
@@ -88,11 +81,7 @@ func (r *Reader) alloc(size int) []byte {
 	}
 
 	if remaining < size {
-		if remaining+r.free < size {
-			r.growSize(size)
-		} else {
-			r.shrink()
-		}
+		r.growSize(size)
 	}
 	return r.allocBuf(size)
 }
@@ -104,11 +93,8 @@ func (r *Reader) releaseTop(size int) {
 func (r *Reader) tryReadBufFull() error {
 	b := r.alloc(allocInf)
 	size, err := r.rd.Read(b)
-	if err != nil {
-		return err
-	}
 	r.releaseTop(len(b) - size)
-	return nil
+	return err
 }
 
 func (r *Reader) tryReadExact(n int) ([]byte, error) {
@@ -175,11 +161,13 @@ func (r *Reader) ReadSlice(delim byte) ([]byte, error) {
 				if r.free == 0 {
 					return r.unreaded(), bufio.ErrBufferFull
 				}
-				r.shrink()
+				r.grow()
 			}
 
 			err := r.tryReadBufFull()
-			if err != nil && err == io.EOF {
+			if err == io.EOF {
+				return r.unreaded(), err
+			} else if err != nil {
 				return nil, err
 			}
 			continue

@@ -1,6 +1,7 @@
 package slab
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"testing"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestReadByteOk(t *testing.T) {
-	rd := bytes.NewBuffer([]byte("abcdef"))
+	rd := bytes.NewBuffer([]byte("abcdefgh"))
 	buf := NewReader(rd, 1)
 	d, err := buf.ReadByte()
 	assert.NoError(t, err)
@@ -24,22 +25,22 @@ func TestReadByteOk(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, byte('b'), d)
 	assert.Len(t, buf.buf, 4)
-	assert.Equal(t, 2, buf.acquired)
-	assert.Equal(t, 2, buf.readed)
+	assert.Equal(t, 1, buf.acquired)
+	assert.Equal(t, 1, buf.readed)
 	assert.Equal(t, 0, buf.free)
 
 	d, err = buf.ReadByte()
 	assert.NoError(t, err)
 	assert.Equal(t, byte('c'), d)
 	assert.Len(t, buf.buf, 4)
-	assert.Equal(t, 3, buf.acquired)
-	assert.Equal(t, 3, buf.readed)
+	assert.Equal(t, 2, buf.acquired)
+	assert.Equal(t, 2, buf.readed)
 	assert.Equal(t, 0, buf.free)
 
 	buf.Release(1)
 	assert.Len(t, buf.buf, 4)
-	assert.Equal(t, 3, buf.acquired)
-	assert.Equal(t, 3, buf.readed)
+	assert.Equal(t, 2, buf.acquired)
+	assert.Equal(t, 2, buf.readed)
 	assert.Equal(t, 1, buf.free)
 
 	d, err = buf.ReadByte()
@@ -47,8 +48,8 @@ func TestReadByteOk(t *testing.T) {
 	assert.Equal(t, byte('d'), d)
 	assert.Len(t, buf.buf, 4)
 
-	assert.Equal(t, 4, buf.acquired)
-	assert.Equal(t, 4, buf.readed)
+	assert.Equal(t, 3, buf.acquired)
+	assert.Equal(t, 3, buf.readed)
 	assert.Equal(t, 1, buf.free)
 
 	d, err = buf.ReadByte()
@@ -57,6 +58,15 @@ func TestReadByteOk(t *testing.T) {
 	assert.Len(t, buf.buf, 4)
 	assert.Equal(t, 4, buf.acquired)
 	assert.Equal(t, 4, buf.readed)
+	assert.Equal(t, 1, buf.free)
+
+	d, err = buf.ReadByte()
+	assert.NoError(t, err)
+	assert.Equal(t, byte('f'), d)
+	assert.Len(t, buf.buf, 8)
+
+	assert.Equal(t, 1, buf.acquired)
+	assert.Equal(t, 1, buf.readed)
 	assert.Equal(t, 0, buf.free)
 }
 
@@ -86,4 +96,25 @@ func TestReadFullOk(t *testing.T) {
 	s, err = buf.ReadFull(10)
 	assert.Equal(t, io.EOF, err)
 	assert.Equal(t, []byte("def"), s)
+}
+
+func TestReadSliceOk(t *testing.T) {
+	rd := bytes.NewBuffer([]byte("abcdefabcdef"))
+	buf := NewReader(rd, 1)
+	buf.grow()
+	buf.grow()
+	assert.Len(t, buf.buf, 4)
+
+	s, err := buf.ReadSlice(byte('c'))
+	assert.NoError(t, err)
+	assert.Equal(t, "abc", string(s))
+
+	buf.Release(len(s))
+	assert.Equal(t, 4, buf.acquired)
+	assert.Equal(t, 3, buf.readed)
+	assert.Equal(t, 3, buf.free)
+
+	s, err = buf.ReadSlice(byte('h'))
+	assert.Equal(t, bufio.ErrBufferFull, err)
+	assert.Equal(t, "defabcde", string(s))
 }
