@@ -68,6 +68,15 @@ func (b *Buffer) Advance(n int) {
 	// }
 }
 
+func (b *Buffer) shrink() {
+	if b.r == 0 {
+		return
+	}
+	copy(b.buf, b.buf[b.r:b.w])
+	b.w -= b.r
+	b.r = 0
+}
+
 func (b *Buffer) buffered() int {
 	return b.w - b.r
 }

@@ -8,17 +8,44 @@ import (
 )
 
 const (
-	defaultReqBufSize  = 512
 	defaultRespBufSize = 4096
 )
+
+var (
+	defaultTime = time.Now()
+)
+
+var msgPool = &sync.Pool{
+	New: func() interface{} {
+		return NewMessage()
+	},
+}
+
+// GetMsg get the msg from pool
+func GetMsg() *Message {
+	return msgPool.Get().(*Message)
+}
+
+// GetMsgSlice alloc a slice to the message
+func GetMsgSlice(n int) []*Message {
+	msgs := make([]*Message, n)
+	for idx := range msgs {
+		msgs[idx] = GetMsg()
+	}
+	return msgs
+}
+
+// PutMsg Release Msg
+func PutMsg(msg *Message) {
+	msgPool.Put(msg)
+}
 
 // Message read from client.
 type Message struct {
 	Type CacheType
 	wg   *sync.WaitGroup
 
-	reqBuf  *bufio.Buffer
-	respBuf *bufio.Buffer
+	buf *bufio.Buffer
 
 	req      []Request
 	subs     []Message
@@ -34,11 +61,18 @@ func NewMessage() *Message {
 	return &Message{
 		wg: &sync.WaitGroup{},
 		// TODO: get with suitable length
-		reqBuf:  bufio.Get(defaultReqBufSize),
-		respBuf: bufio.Get(defaultRespBufSize),
-
-		st: time.Now(),
+		buf: bufio.Get(defaultRespBufSize),
 	}
+}
+
+// Reset will clean the msg
+func (m *Message) Reset() {
+	m.Type = CacheTypeUnknown
+	m.req = m.req[:0]
+	m.subs = m.subs[:0]
+	m.subResps = m.subResps[:0]
+	m.st, m.wt, m.rt, m.et = defaultTime, defaultTime, defaultTime, defaultTime
+	m.err = nil
 }
 
 // TotalDur will return the total duration of a command.
@@ -51,19 +85,24 @@ func (m *Message) RemoteDur() time.Duration {
 	return m.rt.Sub(m.wt)
 }
 
-// SetWriteTime will set the remote duration of the command.
-func (m *Message) SetWriteTime(t time.Time) {
-	m.wt = t
+// MarkStart will set the start time of the command to now.
+func (m *Message) MarkStart() {
+	m.st = time.Now()
 }
 
-// SetReadTime will set the remote duration of the command.
-func (m *Message) SetReadTime(t time.Time) {
-	m.rt = t
+// MarkWrite will set the write time of the command to now.
+func (m *Message) MarkWrite() {
+	m.wt = time.Now()
 }
 
-// SetEndTime will set the remote duration of the command.
-func (m *Message) SetEndTime(t time.Time) {
-	m.et = t
+// MarkRead will set the read time of the command to now.
+func (m *Message) MarkRead() {
+	m.rt = time.Now()
+}
+
+// MarkEnd will set the end time of the command to now.
+func (m *Message) MarkEnd() {
+	m.et = time.Now()
 }
 
 // Add add wg.
@@ -99,23 +138,18 @@ func (m *Message) Wait() {
 	m.wg.Wait()
 }
 
-// ReqBuffer return req buffer.
-func (m *Message) ReqBuffer() *bufio.Buffer {
-	return m.reqBuf
-}
-
-// RespBuffer will return request buffer
-func (m *Message) RespBuffer() *bufio.Buffer {
-	return m.respBuf
+// Buffer will return request buffer
+func (m *Message) Buffer() *bufio.Buffer {
+	return m.buf
 }
 
 // ReleaseBuffer will return the Msg data to flush and reset
 func (m *Message) ReleaseBuffer() {
-	bufio.Put(m.reqBuf)
-	bufio.Put(m.respBuf)
-	for i := 0; i < len(m.subs); i++ {
-		(&m.subs[i]).ReleaseBuffer()
-	}
+	// bufio.Put(m.reqBuf)
+	// bufio.Put(m.buf)
+	// for i := 0; i < len(m.subs); i++ {
+	// 	(&m.subs[i]).ReleaseBuffer()
+	// }
 }
 
 // WithRequest with proto request.
