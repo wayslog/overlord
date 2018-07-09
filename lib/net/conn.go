@@ -3,9 +3,10 @@ package net
 import (
 	"fmt"
 	"net"
-	"overlord/lib/log"
 	"strconv"
 	"time"
+
+	"github.com/felixhao/overlord/lib/log"
 )
 
 // Conn is a net.Conn self implement
