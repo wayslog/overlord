@@ -1,7 +1,10 @@
 package net
 
 import (
+	"fmt"
 	"net"
+	"overlord/lib/log"
+	"strconv"
 	"time"
 )
 
@@ -103,5 +106,19 @@ func (c *Conn) Close() error {
 
 // Writev impl the net.buffersWriter to support writev
 func (c *Conn) Writev(buf *net.Buffers) (int64, error) {
-	return buf.WriteTo(c.Conn)
+	size, err := buf.WriteTo(c.Conn)
+	if err != nil {
+		displayWritevError(c.LocalAddr().String(), c.RemoteAddr().String(), err, buf)
+	}
+	return size, err
+}
+
+func displayWritevError(addr, remote string, err error, buf *net.Buffers) {
+	str := fmt.Sprintf("flush error %s->%s fail due to %v.\nfor detial, buf is:", addr, remote, err)
+	b := [][]byte(*buf)
+	for _, d := range b {
+		str += strconv.Quote(string(d))
+	}
+	str += "\n"
+	log.Error(str)
 }
